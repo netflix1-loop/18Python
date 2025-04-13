@@ -1,2 +1,8 @@
 pip install telethon python-dotenv "qrcode[pil]"
 pip install telethon python-dotenv qrcode
+
+____________________________________________
+
+sudo apt install python3.12-venv
+python3 -m venv venv
+source venv/bin/activate
