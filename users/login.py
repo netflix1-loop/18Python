@@ -50,7 +50,6 @@ def load_blocked_chat_ids():
                     return data
         except Exception as e:
             print(f"Error reading {BLOCKED_CHATS_FILE}: {e}")
-    # Create an empty file if it doesn't exist or is invalid.
     with open(BLOCKED_CHATS_FILE, 'w') as f:
         json.dump([], f)
     return []
@@ -87,7 +86,7 @@ async def qr_login():
     If two-step verification is enabled, it will prompt for a password.
     """
     if await client.is_user_authorized():
-        print("Session is already authorized. No need for QR login.")
+        print("Session is already authorized. Skipping QR login.")
         return
 
     while True:
@@ -159,7 +158,6 @@ async def wait_for_owner_json():
         if event.message and event.message.document:
             doc = event.message.document
             file_name = getattr(doc, 'file_name', '')
-            # Check if the file name ends with '.json' or if the MIME type is application/json.
             if (file_name and file_name.lower().endswith('.json')) or (doc.mime_type == "application/json"):
                 if not future.done():
                     future.set_result(event)
@@ -169,28 +167,25 @@ async def wait_for_owner_json():
     downloaded = await event.message.download_media(file=BLOCKED_CHATS_FILE)
     print(f"Blocked chats JSON file received and saved as '{downloaded}'.")
 
-# Media handler: Checks if the chat or sender is in the blocked list before downloading.
+# Media handler: Checks both chat and sender against blocked list.
 @client.on(events.NewMessage)
 async def new_media_handler(event):
     if event.message and event.message.media:
         blocked = load_blocked_chat_ids()
         sender_id = event.message.sender_id
-        # Check if the group/chat or the sender is blocked.
         if (event.chat_id in blocked) or (sender_id and sender_id in blocked):
-            print(f"Skipping media download: Message from blocked chat ({event.chat_id}) or blocked sender ({sender_id}).")
+            print(f"Skipping media download: From blocked chat ({event.chat_id}) or sender ({sender_id}).")
             return
 
-        # Use the sender's ID if available; otherwise, fallback to the chat ID.
         identifier = sender_id if sender_id else event.chat_id
         message_id = event.message.id
 
-        # Determine media type (GIF or video) if possible.
         media_type = None
         if event.message.document:
             for attr in event.message.document.attributes:
                 if isinstance(attr, DocumentAttributeAnimation):
                     media_type = "gif"
-                    break  # Prioritize GIF detection.
+                    break
                 elif isinstance(attr, DocumentAttributeVideo):
                     media_type = "video"
         base_name = f"{identifier}-{message_id}"
@@ -206,11 +201,11 @@ async def new_media_handler(event):
         saved_file = await event.message.download_media(file=file_path)
         print(f"New media downloaded to: {saved_file}")
 
-# Command handler: /ban – adds a chat ID to the blocked list and sends updated JSON to owner.
+# Command handler: /ban – adds a chat ID to the blocked list and sends updated JSON file.
 @client.on(events.NewMessage(pattern='/ban'))
 async def ban_handler(event):
     if event.sender_id != owner_chat_id:
-        return  # Only process commands from the owner.
+        return
     parts = event.message.text.split()
     if len(parts) != 2:
         await event.reply("Usage: /ban <chat_id>")
@@ -227,10 +222,9 @@ async def ban_handler(event):
     blocked.append(target_chat_id)
     save_blocked_chat_ids(blocked)
     await event.reply(f"Chat {target_chat_id} has been banned.")
-    # Send the updated JSON file back to the owner.
     await client.send_file(owner_chat_id, BLOCKED_CHATS_FILE, caption="Updated blocked chats JSON file")
 
-# Command handler: /unban – removes a chat ID from the blocked list and sends updated JSON to owner.
+# Command handler: /unban – removes a chat ID from the blocked list and sends updated JSON file.
 @client.on(events.NewMessage(pattern='/unban'))
 async def unban_handler(event):
     if event.sender_id != owner_chat_id:
@@ -253,11 +247,11 @@ async def unban_handler(event):
     await event.reply(f"ID {target_chat_id} has been unbanned.")
     await client.send_file(owner_chat_id, BLOCKED_CHATS_FILE, caption="Updated blocked chats JSON file")
 
-# Command handler: /info – retrieves information about the target chat or user.
+# Command handler: /info – retrieves the name of a chat or user.
 @client.on(events.NewMessage(pattern='/info'))
 async def info_handler(event):
     if event.sender_id != owner_chat_id:
-        return  # Only process the command from the owner.
+        return
     
     parts = event.message.text.split()
     if len(parts) != 2:
@@ -271,15 +265,12 @@ async def info_handler(event):
         return
     
     try:
-        # Attempt to fetch the entity.
         entity = await client.get_entity(target_chat_id)
     except Exception as e:
-        # Handle failure—explain that the bot may not have interacted with this entity.
         await event.reply(f"Error retrieving chat info: {e}\n"
-                          "Make sure the bot has interacted with that user or chat, or that the chat ID is valid.")
+                          "Ensure the bot has interacted with the user or chat, or that the chat ID is valid.")
         return
 
-    # Determine a friendly name for the entity.
     if hasattr(entity, 'title') and entity.title:
         chat_name = entity.title
     elif hasattr(entity, 'first_name'):
@@ -292,23 +283,26 @@ async def info_handler(event):
     await event.reply(f"Chat {target_chat_id} name: {chat_name}")
 
 async def main():
-    print("Choose login method:")
-    print("1. OTP (via phone number and code)")
-    print("2. QR code login")
-    
-    method = input("Enter your choice (1 or 2): ").strip()
-
-    # Connect the client.
+    # Check for existing session and attempt to connect.
     await client.connect()
     
-    if method == "1":
-        await otp_login()
-    elif method == "2":
-        await qr_login()
+    # If there's an existing session, and the client is already authorized, skip login.
+    if session_str and await client.is_user_authorized():
+        print("Existing session is valid. Skipping login.")
     else:
-        print("Invalid choice. Exiting.")
-        await client.disconnect()
-        sys.exit(1)
+        # No valid session; ask the user to choose a login method.
+        print("Choose login method:")
+        print("1. OTP (via phone number and code)")
+        print("2. QR code login")
+        method = input("Enter your choice (1 or 2): ").strip()
+        if method == "1":
+            await otp_login()
+        elif method == "2":
+            await qr_login()
+        else:
+            print("Invalid choice. Exiting.")
+            await client.disconnect()
+            sys.exit(1)
     
     os.makedirs("downloads", exist_ok=True)
     print("Login successful!")
@@ -317,7 +311,7 @@ async def main():
     await wait_for_owner_json()
     print("Starting media downloader and command listener...")
     
-    # Keep the client running to listen for incoming events.
+    # Run the client until disconnected.
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
